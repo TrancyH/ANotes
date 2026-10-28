@@ -108,16 +108,20 @@ export function openSheet(rows: (HTMLElement | string | null)[]): void {
   sheetRoot.append(mask, panel)
   document.body.appendChild(sheetRoot)
   requestAnimationFrame(() => sheetRoot?.classList.add('open'))
+  const el = sheetRoot
   sheetClose = () => {
-    sheetRoot?.classList.remove('open')
-    const el = sheetRoot
-    setTimeout(() => el?.remove(), 340)
-    sheetClose = null
+    el.classList.remove('open')
+    setTimeout(() => el.remove(), 340)
   }
 }
 
 export function closeSheet(): void {
+  const el = sheetRoot
+  if (!el) return
+  sheetRoot = null // 必须先置空:sheetOpen() 依据它判断,__routeBack 依赖该状态
   sheetClose?.()
+  sheetClose = null
+  setTimeout(() => el.remove(), 400)
 }
 
 export function sheetOpen(): boolean {

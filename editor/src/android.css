@@ -241,6 +241,7 @@ input { font-family: inherit; color: inherit; }
 }
 .sheet-row:active { background: var(--an-hover); }
 .sheet-row.danger { color: var(--an-danger-text); }
+.sheet-row svg { width: 20px; height: 20px; flex: 0 0 auto; }
 .sheet-row .row-value { margin-left: auto; color: var(--an-text-3); font-size: 13px; }
 .sheet-colors { display: flex; gap: 22px; padding: 16px; }
 .sheet-dot {
@@ -390,6 +391,7 @@ input { font-family: inherit; color: inherit; }
   justify-content: center;
   color: var(--an-on-accent);
 }
+.note-card .card-check svg { width: 13px; height: 13px; }
 .multi .note-card .card-check { display: inline-flex; }
 .multi .note-card.checked .card-check { background: var(--an-accent); border-color: var(--an-accent); }
 .multi .note-card.checked { border-color: var(--an-accent-border); }
