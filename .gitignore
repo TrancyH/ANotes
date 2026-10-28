@@ -1,0 +1,10 @@
+node_modules/
+.DS_Store
+*.log
+
+# Android 构建产物(assets/editor 离线 bundle 是分发件,保留跟踪)
+.gradle/
+build/
+app/build/
+*.apk.idsig
+local.properties
