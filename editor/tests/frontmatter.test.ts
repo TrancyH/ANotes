@@ -19,19 +19,52 @@ describe('makeNoteId', () => {
 })
 
 describe('serializeNote / parseNote 往返', () => {
-  it('完整字段往返无损', () => {
+  it('完整字段(v2 八字段)往返无损', () => {
     const note = {
       id: '20261027-100000-abcde',
       title: '会议纪要\n第二行',
       createdAt: '2026-10-27T02:00:00.000Z',
       updatedAt: '2026-10-27T03:00:00.000Z',
       pinned: true,
+      color: 'blue',
+      trashedAt: null,
+      remindAt: null,
       markdown: '# 标题\n\n正文 **加粗** 与 `代码`。',
     }
     const raw = serializeNote(note)
     expect(raw).toContain('id: 20261027-100000-abcde')
     expect(raw).toContain('pinned: true')
+    expect(raw).toContain('color: blue')
     expect(parseNote(raw)).toEqual(note)
+  })
+
+  it('v2 全量字段(color/trashedAt/remindAt)往返无损', () => {
+    const note = {
+      ...createNote('body'),
+      title: '全量字段',
+      color: 'amber' as const,
+      trashedAt: '2026-10-27T04:00:00.000Z',
+      remindAt: '2026-11-01T08:30:00.000Z',
+    }
+    expect(parseNote(serializeNote(note))).toEqual(note)
+  })
+
+  it('旧 5 字段文件读入按 v2 缺省值,再保存补齐全量(无损升级)', () => {
+    const legacy =
+      '---\nid: old01\ntitle: 旧笔记\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-02T00:00:00.000Z\npinned: true\n---\n旧正文'
+    const parsed = parseNote(legacy)
+    expect(parsed.color).toBe('default')
+    expect(parsed.trashedAt).toBeNull()
+    expect(parsed.remindAt).toBeNull()
+    expect(parsed.pinned).toBe(true)
+    expect(parsed.title).toBe('旧笔记')
+    expect(parsed.markdown).toBe('旧正文')
+    const upgraded = parseNote(serializeNote(parsed))
+    expect(upgraded).toEqual(parsed)
+    const raw = serializeNote(parsed)
+    expect(raw).toContain('color: default')
+    expect(raw).toContain('trashedAt: null')
+    expect(raw).toContain('remindAt: null')
   })
 
   it('空正文 / 空标题', () => {
@@ -40,6 +73,7 @@ describe('serializeNote / parseNote 往返', () => {
     expect(back.markdown).toBe('')
     expect(back.id).toBe(note.id)
     expect(back.pinned).toBe(false)
+    expect(back.color).toBe('default')
   })
 
   it('正文包含 frontmatter 形态文本时不误切', () => {
@@ -67,6 +101,15 @@ describe('serializeNote / parseNote 往返', () => {
   it('pinned 非法值按 false', () => {
     const note = parseNote('---\nid: x2\npinned: maybe\n---\n')
     expect(note.pinned).toBe(false)
+  })
+
+  it('v2 非法值容错:color 非法按 default,坏时间按 null,null 字面量按 null', () => {
+    const note = parseNote(
+      '---\nid: x6\ncolor: pink\ntrashedAt: not-a-date\nremindAt: null\n---\n',
+    )
+    expect(note.color).toBe('default')
+    expect(note.trashedAt).toBeNull()
+    expect(note.remindAt).toBeNull()
   })
 })
 

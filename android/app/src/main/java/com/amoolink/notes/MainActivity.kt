@@ -2,99 +2,62 @@ package com.amoolink.notes
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.AlertDialog
+import android.content.Intent
+import android.graphics.Color
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.FileObserver
 import android.os.Handler
 import android.os.Looper
-import android.text.TextUtils
-import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
+import android.view.WindowInsetsController
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.Random
 import java.util.regex.Pattern
 
 /**
- * AmooNotes(M6):WebView 壳承载 Tiptap 编辑器离线 bundle;
- * Kotlin 只负责 .md 文件读写(assets/editor 内 JS 完成 frontmatter 序列化)与
- * FileObserver 外部变更(桌面端 ADB 同步写入)感知。
- * 目录:getExternalFilesDir/notes —— app 免权限读写,adb 可直连,即同步通道(docs/08 §3.3)。
+ * ANotes P0:全 Web UI 壳 —— 列表/编辑/回收站/设置四页全部在 WebView 内
+ * (assets/editor bundle,hash 路由)。原生只保留四件事(docs/01 §2.3):
+ * 文件 IO 桥 / 系统主题与系统栏 / 返回键路由回退 / 外链转系统浏览器。
+ * 目录:getExternalFilesDir/notes —— 免权限读写,adb 可直连,即 ALink 同步通道。
  */
 class MainActivity : Activity() {
 
     private lateinit var web: WebView
     private lateinit var notesDir: File
-    private lateinit var titleView: TextView
 
+    /** 当前编辑中的笔记(编辑页经 setCurrentNote 同步;FileObserver 防回环与热替换依赖)。 */
+    @Volatile
     private var currentId = ""
+
+    @Volatile
     private var lastSelfWriteAt = 0L
+
+    @Volatile
+    private var lastExternalWriteAt = 0L
+
     private var observer: FileObserver? = null
     private val ui = Handler(Looper.getMainLooper())
 
     private val idPattern = Pattern.compile("^[0-9]{8}-[0-9]{6}-[a-z0-9]{5}$")
-    private val titlePattern = Pattern.compile("^title:(.*)$", Pattern.MULTILINE)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        notesDir = File(getExternalFilesDir(null), "notes").apply { mkdirs() }
-
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(10), dp(26), dp(10), dp(6))
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val listBtn = Button(this).apply {
-            text = "列表"
-            isAllCaps = false
-            textSize = 14f
-            minHeight = 0
-            minimumWidth = 0
-            setPadding(dp(14), dp(6), dp(14), dp(6))
-        }
-        titleView = TextView(this).apply {
-            gravity = Gravity.CENTER
-            textSize = 17f
-            isSingleLine = true
-            ellipsize = TextUtils.TruncateAt.END
-            setPadding(dp(8), 0, dp(8), 0)
-        }
-        val newBtn = Button(this).apply {
-            text = "新建"
-            isAllCaps = false
-            textSize = 14f
-            minHeight = 0
-            minimumWidth = 0
-            setPadding(dp(14), dp(6), dp(14), dp(6))
-        }
-        bar.addView(listBtn)
-        bar.addView(
-            titleView,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        // 主题与系统深浅色一致,消除启动白闪(零资源方案:直接用框架双主题)
+        setTheme(
+            if (isDarkTheme()) android.R.style.Theme_Material_NoActionBar
+            else android.R.style.Theme_Material_Light_NoActionBar,
         )
-        bar.addView(newBtn)
+        notesDir = File(getExternalFilesDir(null), "notes").apply { mkdirs() }
         web = WebView(this)
-        root.addView(bar)
-        root.addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        setContentView(root)
-
-        listBtn.setOnClickListener { showNoteList() }
-        newBtn.setOnClickListener { createAndOpen() }
-
+        setContentView(web)
         setupWebView()
+        applySystemBars()
         startObserver()
     }
 
@@ -102,14 +65,65 @@ class MainActivity : Activity() {
     private fun setupWebView() {
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
+        web.setBackgroundColor(Color.TRANSPARENT)
         web.addJavascriptInterface(Bridge(), "AmooNative")
         web.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                // ready 由 JS 主动回调(index.html),此处兜底:1.5s 后仍未打开则取最新
-                ui.postDelayed({ if (currentId.isEmpty()) openLatest() }, 1500)
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                val u = url ?: return false
+                // http(s) 外链一律转系统浏览器(docs/01 §2.3);其余(file:// 等)留在壳内
+                if (u.startsWith("http://") || u.startsWith("https://")) {
+                    runCatching {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)))
+                    }
+                    return true
+                }
+                return false
             }
         }
         web.loadUrl("file:///android_asset/index.html")
+    }
+
+    /** 系统栏与页面同色(docs/01 §4.8);icon 亮暗随主题。 */
+    private fun applySystemBars() {
+        val dark = isDarkTheme()
+        window.statusBarColor = if (dark) BG_DARK else BG_LIGHT
+        window.navigationBarColor = if (dark) BG_DARK else BG_LIGHT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.setSystemBarsAppearance(
+                if (dark) 0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            val flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = if (dark) 0 else flags
+        }
+    }
+
+    private fun isDarkTheme(): Boolean =
+        (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applySystemBars()
+        web.evaluateJavascript("window.__themeChange(${isDarkTheme()})", null)
+    }
+
+    /** 返回键:Web 路由优先消费(弹层→多选→编辑→子页),否则交还系统(列表页退到桌面)。 */
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        web.evaluateJavascript("window.__routeBack ? window.__routeBack() : 'false'") { value ->
+            ui.post {
+                if (!value.contains("true")) {
+                    @Suppress("DEPRECATION")
+                    super.onBackPressed()
+                }
+            }
+        }
     }
 
     private fun startObserver() {
@@ -117,23 +131,33 @@ class MainActivity : Activity() {
         observer = object : FileObserver(notesDir.absolutePath, mask) {
             override fun onEvent(event: Int, path: String?) {
                 if (path == null || !path.endsWith(".md")) return
-                ui.post { onExternalChange(path) }
+                ui.post { onExternalChange(event, path) }
             }
         }
         observer?.startWatching()
     }
 
-    /** 桌面端同步写入当前笔记 → 热替换编辑器内容(1.5s 内的自身写入除外)。 */
-    private fun onExternalChange(name: String) {
+    /** 桌面端同步写入:当前笔记热替换(1.5s 防自身回环);其余刷新列表;删除当前笔记则退出编辑。 */
+    private fun onExternalChange(event: Int, name: String) {
+        lastExternalWriteAt = System.currentTimeMillis()
         val id = name.removeSuffix(".md")
-        if (id != currentId) return
-        if (System.currentTimeMillis() - lastSelfWriteAt < 1500) return
-        val raw = readNoteFile(id) ?: return
-        switchTo(id, raw)
-        Toast.makeText(this, "笔记已从电脑同步更新", Toast.LENGTH_SHORT).show()
+        if (id == currentId) {
+            if (event == FileObserver.DELETE) {
+                currentId = ""
+                web.evaluateJavascript("window.__noteRemoved(${JSONObject.quote(id)})", null)
+                Toast.makeText(this, "该笔记已从电脑删除", Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (System.currentTimeMillis() - lastSelfWriteAt < 1500) return
+            val raw = readNoteFile(id) ?: return
+            val payload = JSONObject().put("id", id).put("raw", raw)
+            web.evaluateJavascript("window.__switch(${JSONObject.quote(payload.toString())})", null)
+            Toast.makeText(this, "已从电脑同步更新", Toast.LENGTH_SHORT).show()
+        }
+        web.evaluateJavascript("window.__notesChanged()", null)
     }
 
-    // ── 笔记操作 ──────────────────────────────────────────
+    // ── 文件读写(原子写,防回环)─────────────────────────
 
     private fun readNoteFile(id: String): String? = try {
         File(notesDir, "$id.md").readText()
@@ -155,79 +179,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun openLatest() {
-        val latest = listNoteFiles().firstOrNull()
-        if (latest == null) createAndOpen() else switchTo(latest.nameWithoutExtension, readNoteFile(latest.nameWithoutExtension) ?: "")
-    }
-
-    private fun switchTo(id: String, raw: String) {
-        currentId = id
-        val payload = JSONObject().put("id", id).put("raw", raw)
-        web.evaluateJavascript("window.__switch(${JSONObject.quote(payload.toString())})", null)
-    }
-
-    private fun createAndOpen() {
-        val id = makeId()
-        switchTo(id, "")
-        // 立即落一个空笔记文件(frontmatter 由 JS serialize 生成)
-        web.evaluateJavascript("window.__flushNow()", null)
-        Toast.makeText(this, "已新建笔记", Toast.LENGTH_SHORT).show()
-    }
-
     private fun listNoteFiles(): List<File> =
-        notesDir.listFiles { f -> f.name.endsWith(".md") }?.sortedByDescending { it.lastModified() } ?: emptyList()
-
-    private fun noteTitle(id: String): String {
-        val raw = readNoteFile(id) ?: return id
-        val m = titlePattern.matcher(raw.take(512))
-        return if (m.find()) m.group(1)?.trim()?.ifEmpty { id } ?: id else id
-    }
-
-    private fun showNoteList() {
-        val files = listNoteFiles()
-        val ids = files.map { it.nameWithoutExtension }
-        val titles = ids.map { noteTitle(it) }
-        val adapter = android.widget.ArrayAdapter(
-            this,
-            android.R.layout.simple_list_item_1,
-            titles.map { t -> if (t.length > 28) t.take(28) + "…" else t }.toTypedArray(),
-        )
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("我的笔记(${ids.size})")
-            .setAdapter(adapter) { d, which ->
-                val id = ids[which]
-                switchTo(id, readNoteFile(id) ?: "")
-                d.dismiss()
-            }
-            .setNegativeButton("关闭", null)
-            .create()
-        dialog.listView.onItemLongClickListener = android.widget.AdapterView.OnItemLongClickListener { _, _, which, _ ->
-            val id = ids[which]
-            AlertDialog.Builder(this)
-                .setTitle("删除笔记?")
-                .setMessage(titles[which])
-                .setPositiveButton("删除") { d, _ ->
-                    File(notesDir, "$id.md").delete()
-                    Toast.makeText(this, "已删除(连接电脑后同步)", Toast.LENGTH_SHORT).show()
-                    if (id == currentId) openLatest()
-                    d.dismiss()
-                }
-                .setNegativeButton("取消", null)
-                .show()
-            dialog.dismiss()
-            true
-        }
-        dialog.show()
-    }
-
-    private fun makeId(): String {
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-        val rand = buildString { repeat(5) { append(chars[Random().nextInt(chars.length)]) } }
-        return "$stamp-$rand"
-    }
-
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+        notesDir.listFiles { f -> f.name.endsWith(".md") }?.sortedByDescending { it.lastModified() }
+            ?: emptyList()
 
     // ── JS 桥(JS 线程调用,文件 IO 直接执行)────────────────
 
@@ -243,14 +197,9 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun listNotes(): String {
-            val arr = JSONArray()
+            val arr = org.json.JSONArray()
             for (f in listNoteFiles()) {
-                arr.put(
-                    JSONObject()
-                        .put("id", f.nameWithoutExtension)
-                        .put("title", noteTitle(f.nameWithoutExtension))
-                        .put("lastModified", f.lastModified()),
-                )
+                arr.put(JSONObject().put("id", f.nameWithoutExtension).put("lastModified", f.lastModified()))
             }
             return arr.toString()
         }
@@ -258,24 +207,51 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun deleteNote(id: String): Boolean {
             if (!idPattern.matcher(id).matches()) return false
-            val ok = File(notesDir, "$id.md").delete()
-            if (ok && id == currentId) ui.post { openLatest() }
-            return ok
+            return File(notesDir, "$id.md").delete()
         }
 
+        /** 兼容保留(旧 glue 调用;全 Web UI 后标题由 Web 渲染)。 */
         @JavascriptInterface
-        fun setTitle(title: String) {
-            ui.post { titleView.text = title }
-        }
+        fun setTitle(title: String) = Unit
 
         @JavascriptInterface
-        fun ready() {
-            ui.post { if (currentId.isEmpty()) openLatest() }
-        }
+        fun ready() = Unit
 
         @JavascriptInterface
         fun log(message: String) {
             android.util.Log.d("AmooNotes", message)
         }
+
+        /** P0 新增:http(s) 外链转系统浏览器。 */
+        @JavascriptInterface
+        fun openExternal(url: String) {
+            if (!url.startsWith("http://") && !url.startsWith("https://")) return
+            ui.post {
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            }
+        }
+
+        /** P0 新增:'dark' | 'light'(同步返回)。 */
+        @JavascriptInterface
+        fun getSystemTheme(): String = if (isDarkTheme()) "dark" else "light"
+
+        /** P0 新增:可观测同步状态(JSON)。 */
+        @JavascriptInterface
+        fun getStatus(): String =
+            JSONObject()
+                .put("lastExternalWriteAt", lastExternalWriteAt)
+                .put("lastSelfWriteAt", lastSelfWriteAt)
+                .toString()
+
+        /** P0 新增:编辑页进入/离开同步当前笔记 id。 */
+        @JavascriptInterface
+        fun setCurrentNote(id: String) {
+            currentId = id
+        }
+    }
+
+    private companion object {
+        val BG_DARK = Color.parseColor("#0e0f13")
+        val BG_LIGHT = Color.parseColor("#f7f8fa")
     }
 }

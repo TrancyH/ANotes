@@ -1,15 +1,27 @@
-import type { NoteFile } from './types'
-export type { NoteFile }
+import type { NoteColor, NoteFile } from './types'
+import { NOTE_COLORS } from './types'
+export type { NoteColor, NoteFile }
 
 /**
- * 笔记 .md 文件 ←→ NoteFile 的序列化(纯函数,三端共用)。
- * frontmatter 为固定 schema 的 YAML 子集(id/title/createdAt/updatedAt/pinned),
+ * 笔记 .md 文件 ←→ NoteFile 的序列化(纯函数)。
+ * frontmatter 为固定 schema 的 YAML 子集,v2 共 8 字段
+ * (id/title/createdAt/updatedAt/pinned/color/trashedAt/remindAt,固定顺序,全量写入),
  * 不引入 yaml 依赖;损坏字段尽力还原,永不抛错。
  */
 
 export function createNote(markdown = ''): NoteFile {
   const now = new Date().toISOString()
-  return { id: makeNoteId(), title: '', createdAt: now, updatedAt: now, pinned: false, markdown }
+  return {
+    id: makeNoteId(),
+    title: '',
+    createdAt: now,
+    updatedAt: now,
+    pinned: false,
+    color: 'default',
+    trashedAt: null,
+    remindAt: null,
+    markdown,
+  }
 }
 
 /** `yyyyMMdd-HHmmss-xxxxx`(随机后缀 36 进制,双端独立生成不冲突)。 */
@@ -23,7 +35,7 @@ export function makeNoteId(now = new Date()): string {
   return `${stamp}-${rand}`
 }
 
-/** 序列化为 .md 文件内容(frontmatter + 正文)。 */
+/** 序列化为 .md 文件内容(frontmatter + 正文,v2 全量 8 字段)。 */
 export function serializeNote(note: NoteFile): string {
   const lines = [
     '---',
@@ -32,6 +44,9 @@ export function serializeNote(note: NoteFile): string {
     `createdAt: ${note.createdAt}`,
     `updatedAt: ${note.updatedAt}`,
     `pinned: ${note.pinned}`,
+    `color: ${note.color}`,
+    `trashedAt: ${note.trashedAt ?? 'null'}`,
+    `remindAt: ${note.remindAt ?? 'null'}`,
     '---',
     '',
     note.markdown,
@@ -54,11 +69,20 @@ export function parseNote(raw: string): NoteFile {
     createdAt: validIso(fields['createdAt']) ?? new Date().toISOString(),
     updatedAt: validIso(fields['updatedAt']) ?? new Date().toISOString(),
     pinned: fields['pinned'] === true,
+    color: parseColor(fields['color']),
+    trashedAt: validIsoOrNull(fields['trashedAt']),
+    remindAt: validIsoOrNull(fields['remindAt']),
     markdown,
   }
 }
 
 // ── 内部 ──────────────────────────────────────────────
+
+function parseColor(v: unknown): NoteColor {
+  return typeof v === 'string' && (NOTE_COLORS as readonly string[]).includes(v)
+    ? (v as NoteColor)
+    : 'default'
+}
 
 function splitFrontmatter(raw: string): {
   fields: Record<string, string | boolean>
@@ -83,6 +107,12 @@ function validIso(v: unknown): string | undefined {
   if (typeof v !== 'string') return undefined
   const d = new Date(v)
   return Number.isNaN(d.getTime()) ? undefined : v
+}
+
+/** v2 时间字段:null 字面量 / 缺失 / 非法值 → null。 */
+function validIsoOrNull(v: unknown): string | null {
+  if (v === undefined || v === null || v === 'null' || v === '') return null
+  return validIso(v) ?? null
 }
 
 function deriveTitle(markdown: string): string {

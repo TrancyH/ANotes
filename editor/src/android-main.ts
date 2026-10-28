@@ -4,7 +4,7 @@
  */
 import { Editor } from '@tiptap/core'
 import { createNoteExtensions, editorToMarkdown } from './extensions'
-import { makeNoteId, parseNote, serializeNote, type NoteFile } from './frontmatter'
+import { makeNoteId, parseNote, serializeNote, type NoteColor, type NoteFile } from './frontmatter'
 import './android.css'
 
 export interface NoteEditorHandle {
@@ -27,6 +27,10 @@ export interface AndroidBridge {
   loadNote: (payload: { id: string; raw: string; readOnly?: boolean }) => void
   /** 当前编辑内容序列化为 .md(原生保存用)。 */
   serialize: () => { id: string; raw: string }
+  /** 编辑页改颜色/置顶:写上下文,下次 serialize 落盘。 */
+  setMeta: (patch: { color?: NoteColor; pinned?: boolean }) => void
+  /** 当前上下文(v2 字段,列表卡片即时刷新用)。 */
+  meta: () => { id: string; pinned: boolean; color: NoteColor }
   makeId: () => string
   parse: (raw: string) => NoteFile
 }
@@ -37,30 +41,41 @@ declare global {
   }
 }
 
+/** 编辑器回调(复用挂载时可更新;闭包经此间接调用)。 */
+let callbacks = { onChange: (_raw: string) => {}, onTitleInput: (_t: string) => {} }
+
 export function mountNoteEditor(
   host: HTMLElement,
   onChange: (markdown: string) => void,
   onTitleInput: (title: string) => void,
 ): NoteEditorHandle {
-  host.innerHTML = ''
+  callbacks = { onChange, onTitleInput }
+  // 跨页面复用:编辑器 DOM(Tiptap 实例)只建一次,后续挂载直接搬移节点,内容状态保留
+  if (mountedWrap) {
+    host.appendChild(mountedWrap)
+    return handle!
+  }
+  const wrap = document.createElement('div')
   const titleInput = document.createElement('input')
   titleInput.className = 'note-title-input'
   titleInput.placeholder = '标题'
-  titleInput.addEventListener('input', () => onTitleInput(titleInput.value))
+  titleInput.addEventListener('input', () => callbacks.onTitleInput(titleInput.value))
 
   const editorHost = document.createElement('div')
   editorHost.className = 'notes-prose-host'
-  host.append(titleInput, editorHost)
+  wrap.append(titleInput, editorHost)
+  host.appendChild(wrap)
+  mountedWrap = wrap
 
   const editor = new Editor({
     extensions: createNoteExtensions(),
     content: '',
     element: editorHost,
     editorProps: { attributes: { class: 'notes-prose' } },
-    onUpdate: ({ editor: ed }) => onChange(editorToMarkdown(ed)),
+    onUpdate: ({ editor: ed }) => callbacks.onChange(editorToMarkdown(ed)),
   })
 
-  return {
+  handle = {
     setMarkdown(markdown) {
       editor.commands.setContent(markdown, { emitUpdate: false })
     },
@@ -87,10 +102,21 @@ export function mountNoteEditor(
     focus: () => editor.commands.focus(),
     destroy: () => editor.destroy(),
   }
+  return handle
 }
 
+let mountedWrap: HTMLElement | null = null
+let handle: NoteEditorHandle | null = null
+
 let currentHandle: NoteEditorHandle | null = null
-let currentContext = { id: '', createdAt: new Date().toISOString(), pinned: false }
+let currentContext = {
+  id: '',
+  createdAt: new Date().toISOString(),
+  pinned: false,
+  color: 'default' as NoteColor,
+  trashedAt: null as string | null,
+  remindAt: null as string | null,
+}
 
 function noteTitleInput(): HTMLInputElement | null {
   return document.querySelector('.note-title-input')
@@ -116,6 +142,9 @@ window.AmooNotes = {
       id: payload.id || note?.id || makeNoteId(),
       createdAt: note?.createdAt ?? now,
       pinned: note?.pinned ?? false,
+      color: note?.color ?? 'default',
+      trashedAt: note?.trashedAt ?? null,
+      remindAt: note?.remindAt ?? null,
     }
   },
   serialize: () => {
@@ -127,10 +156,22 @@ window.AmooNotes = {
       createdAt: currentContext.createdAt,
       updatedAt: now,
       pinned: currentContext.pinned,
+      color: currentContext.color,
+      trashedAt: currentContext.trashedAt,
+      remindAt: currentContext.remindAt,
       markdown: currentHandle.getMarkdown(),
     })
     return { id: currentContext.id, raw }
   },
   makeId: () => makeNoteId(),
   parse: (raw) => parseNote(raw),
+  setMeta: (patch) => {
+    if (patch.color) currentContext.color = patch.color
+    if (patch.pinned !== undefined) currentContext.pinned = patch.pinned
+  },
+  meta: () => ({
+    id: currentContext.id,
+    pinned: currentContext.pinned,
+    color: currentContext.color,
+  }),
 }
