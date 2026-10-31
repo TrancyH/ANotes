@@ -1,6 +1,6 @@
 import type { NoteColor, NoteFile, NoteListItem } from './types'
 import { NOTE_COLORS } from './types'
-import { noteExcerpt, noteWordCount } from './frontmatter'
+import { markdownToText, noteExcerpt, noteWordCount, parseNote } from './frontmatter'
 
 /**
  * 列表/回收站页的纯逻辑(无 DOM,单测覆盖):
@@ -35,13 +35,23 @@ export function todoProgress(markdown: string): { done: number; total: number } 
   return { done, total }
 }
 
-/** 搜索:标题 + 摘要包含匹配(大小写不敏感,query 去空白)。 */
-export function searchNotes(items: NoteListItem[], query: string): NoteListItem[] {
+/** 搜索:标题 + 摘要 + 正文全文(传 rawOf 时逐条剥 frontmatter 匹配;大小写不敏感)。 */
+export function searchNotes(
+  items: NoteListItem[],
+  query: string,
+  rawOf?: (id: string) => string,
+): NoteListItem[] {
   const q = query.trim().toLowerCase()
   if (!q) return items
-  return items.filter(
-    (n) => n.title.toLowerCase().includes(q) || n.excerpt.toLowerCase().includes(q),
-  )
+  return items.filter((n) => {
+    if (n.title.toLowerCase().includes(q)) return true
+    if (n.excerpt.toLowerCase().includes(q)) return true
+    // 摘要只取首 60 字,长文命中靠全文扫描(raw 已缓存,本地量级可承受)
+    if (rawOf && markdownToText(parseNote(rawOf(n.id)).markdown).toLowerCase().includes(q)) {
+      return true
+    }
+    return false
+  })
 }
 
 /** 四色过滤;'all' 不过滤。 */
@@ -80,12 +90,70 @@ export function sortForList<T extends { pinned: boolean; updatedAt: string }>(it
   })
 }
 
+/** 列表排序键:'updated'(默认,= sortForList) | 'created' 倒序 | 'title' 字典序;置顶始终在前。 */
+export type SortKey = 'updated' | 'created' | 'title'
+
+export function sortByKey<
+  T extends { pinned: boolean; updatedAt: string; createdAt: string; title: string },
+>(items: T[], key: SortKey): T[] {
+  if (key === 'updated') return sortForList(items)
+  return [...items].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+    if (key === 'created') return b.createdAt.localeCompare(a.createdAt)
+    return a.title.localeCompare(b.title, 'zh')
+  })
+}
+
 /** 回收站内按 trashedAt 倒序(最近删的在前)。 */
 export function sortForTrash<T extends { trashedAt: string | null }>(items: T[]): T[] {
   return [...items].sort((a, b) => (b.trashedAt ?? '').localeCompare(a.trashedAt ?? ''))
 }
 
 const CONFLICT_RE = /-冲突-\d{8}-\d{4}$/
+
+// ── 待办聚合(跨笔记收集 TaskList 条目)──────────────────
+
+/** 待办条目(聚合视图行)。 */
+export interface TodoEntry {
+  noteId: string
+  noteTitle: string
+  /** markdown 行号(0 基),勾选写回用。 */
+  lineIndex: number
+  text: string
+  done: boolean
+}
+
+/** 单行待办解析(等价语法 `- [x] 文本`;纯字符串操作,不用正则)。 */
+function parseTodoLine(line: string): { done: boolean; text: string } | null {
+  const t = line.trimStart()
+  const bullet = t.startsWith('- ') || t.startsWith('* ') || t.startsWith('+ ')
+  if (!bullet) return null
+  const rest = t.slice(2)
+  if (!rest.startsWith('[')) return null
+  const mark = rest.charAt(1)
+  if (mark !== ' ' && mark !== 'x' && mark !== 'X') return null
+  if (rest.charAt(2) !== ']') return null
+  let body = rest.slice(3)
+  if (body.startsWith(' ')) body = body.slice(1)
+  const text = body.trim()
+  if (!text) return null
+  return { done: mark !== ' ', text }
+}
+
+/** 收集存活笔记正文里的全部待办条目(未完成在前,同笔记按行序)。 */
+export function collectTodos(items: NoteListItem[], rawOf: (id: string) => string): TodoEntry[] {
+  const out: TodoEntry[] = []
+  for (const n of items) {
+    const lines = parseNote(rawOf(n.id)).markdown.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const todo = parseTodoLine(lines[i] as string)
+      if (todo) {
+        out.push({ noteId: n.id, noteTitle: n.title, lineIndex: i, text: todo.text, done: todo.done })
+      }
+    }
+  }
+  return out.sort((a, b) => Number(a.done) - Number(b.done))
+}
 
 /** 冲突双副本识别(标题后缀 `-冲突-yyyyMMdd-HHmm`)。 */
 export function isConflictCopy(title: string): boolean {

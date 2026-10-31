@@ -4,15 +4,28 @@
  */
 import { Editor } from '@tiptap/core'
 import { createNoteExtensions, editorToMarkdown } from './extensions'
-import { makeNoteId, parseNote, serializeNote, type NoteColor, type NoteFile } from './frontmatter'
+import {
+  hasExplicitTitle,
+  makeNoteId,
+  parseNote,
+  serializeNote,
+  type NoteColor,
+  type NoteFile,
+} from './frontmatter'
 import './android.css'
 
 export interface NoteEditorHandle {
   setMarkdown: (markdown: string) => void
   getMarkdown: () => string
   setTitle: (title: string) => void
-  /** 原生工具栏命令:bold/italic/strike/h2/h3/ul/ol/task/quote/code */
+  /** 原生工具栏命令:bold/italic/strike/h2/h3/ul/ol/task/quote/code/undo/redo */
   exec: (command: string) => void
+  /** 插入链接:有选区时为选区加 link mark,无选区时插入「文本+链接」。 */
+  insertLink: (url: string, text?: string) => void
+  /** 光标处是否在链接内(链接面板状态用)。 */
+  inLink: () => boolean
+  /** 移除选区/光标处的 link mark。 */
+  removeLink: () => void
   focus: () => void
   destroy: () => void
 }
@@ -27,10 +40,16 @@ export interface AndroidBridge {
   loadNote: (payload: { id: string; raw: string; readOnly?: boolean }) => void
   /** 当前编辑内容序列化为 .md(原生保存用)。 */
   serialize: () => { id: string; raw: string }
-  /** 编辑页改颜色/置顶:写上下文,下次 serialize 落盘。 */
-  setMeta: (patch: { color?: NoteColor; pinned?: boolean }) => void
+  /** 插入链接:有选区为选区加 mark,无选区插入「文本+链接」。 */
+  insertLink: (url: string, text?: string) => void
+  /** 光标处是否在链接内(链接面板状态)。 */
+  inLink: () => boolean
+  /** 移除选区/光标处的链接。 */
+  removeLink: () => void
+  /** 编辑页改颜色/置顶/提醒:写上下文,下次 serialize 落盘。 */
+  setMeta: (patch: { color?: NoteColor; pinned?: boolean; remindAt?: string | null }) => void
   /** 当前上下文(v2 字段,列表卡片即时刷新用)。 */
-  meta: () => { id: string; pinned: boolean; color: NoteColor }
+  meta: () => { id: string; pinned: boolean; color: NoteColor; remindAt: string | null }
   makeId: () => string
   parse: (raw: string) => NoteFile
 }
@@ -96,9 +115,30 @@ export function mountNoteEditor(
         case 'task': c.toggleTaskList().run(); break
         case 'quote': c.toggleBlockquote().run(); break
         case 'code': c.toggleCode().run(); break
+        case 'undo': c.undo().run(); break
+        case 'redo': c.redo().run(); break
         default: break
       }
     },
+    insertLink(url, text) {
+      const { empty } = editor.state.selection
+      if (empty) {
+        editor
+          .chain()
+          .focus()
+          .insertContent({
+            type: 'text',
+            text: text?.trim() || url,
+            marks: [{ type: 'link', attrs: { href: url } }],
+          })
+          .insertContent(' ')
+          .run()
+      } else {
+        editor.chain().focus().setLink({ href: url }).run()
+      }
+    },
+    inLink: () => editor.isActive('link'),
+    removeLink: () => editor.chain().focus().unsetLink().run(),
     focus: () => editor.commands.focus(),
     destroy: () => editor.destroy(),
   }
@@ -126,7 +166,8 @@ window.AmooNotes = {
   mount: (opts) => {
     const host = document.getElementById('host')
     if (!host) throw new Error('#host 不存在')
-    if (currentHandle) return currentHandle
+    // 统一走 mountNoteEditor:其复用分支负责把缓存的编辑器 DOM 搬进当前 #host
+    // (路由重渲染后 #host 是新节点,直接 return 旧 handle 会导致编辑器不可见)
     currentHandle = mountNoteEditor(host, opts.onChange, opts.onTitleInput)
     return currentHandle
   },
@@ -136,7 +177,10 @@ window.AmooNotes = {
     if (!currentHandle) currentHandle = mountNoteEditor(host, () => undefined, () => undefined)
     const note = payload.raw.trim() ? parseNote(payload.raw) : null
     currentHandle.setMarkdown(note?.markdown ?? '')
-    currentHandle.setTitle(note?.title ?? '')
+    // 标题输入框仅在 frontmatter 显式写有 title 时回填:
+    // 派生标题(含「未命名笔记」)不进输入框,保持 placeholder「标题」,
+    // 否则空笔记被预填后用户正文首行派生机制失效(真机实测发现)
+    currentHandle.setTitle(hasExplicitTitle(payload.raw) ? (note?.title ?? '') : '')
     const now = new Date().toISOString()
     currentContext = {
       id: payload.id || note?.id || makeNoteId(),
@@ -163,15 +207,20 @@ window.AmooNotes = {
     })
     return { id: currentContext.id, raw }
   },
+  insertLink: (url, text) => currentHandle?.insertLink(url, text),
+  inLink: () => currentHandle?.inLink() ?? false,
+  removeLink: () => currentHandle?.removeLink(),
   makeId: () => makeNoteId(),
   parse: (raw) => parseNote(raw),
   setMeta: (patch) => {
     if (patch.color) currentContext.color = patch.color
     if (patch.pinned !== undefined) currentContext.pinned = patch.pinned
+    if (patch.remindAt !== undefined) currentContext.remindAt = patch.remindAt
   },
   meta: () => ({
     id: currentContext.id,
     pinned: currentContext.pinned,
     color: currentContext.color,
+    remindAt: currentContext.remindAt,
   }),
 }

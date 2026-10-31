@@ -50,18 +50,25 @@ export const icons = {
   check: svg('M20 6L9 17l-5-5'),
   palette: svg('M12 22a10 10 0 1 1 10-10c0 2.2-1.8 3-3 3h-2a2 2 0 0 0-1.5 3.3c.3.4.5.8.5 1.2a2.5 2.5 0 0 1-2.5 2.5zM7.5 10.5h.01M12 7h.01M16.5 10.5h.01'),
   chevron: svg('M9 18l6-6-6-6'),
+  clock: svg('M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2'),
+  share: svg('M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13'),
+  sort: svg('M8 5v14M8 19l-3-3M8 5l3 3M16 19V5M16 5l-3 3M16 19l3-3'),
+  todos: svg('M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'),
+  link: svg('M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'),
 }
 
 // ── Toast ────────────────────────────────────────────
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let toastEl: HTMLElement | null = null
+let toastHasAction = false
 
 export function toast(message: string, action?: { label: string; run: () => void }): void {
   if (!toastEl) {
     toastEl = h('div', { id: 'an-toast' })
     document.body.appendChild(toastEl)
   }
+  toastHasAction = !!action
   toastEl.replaceChildren(
     h('span', {}, message),
     ...(action
@@ -89,10 +96,19 @@ function hideToast(): void {
   toastEl?.classList.remove('show')
 }
 
+/** 带「撤销」的 Toast 是否在显示(返回键策略第一层,设计 §4.9)。 */
+export function toastActionShown(): boolean {
+  return toastHasAction && toastEl?.classList.contains('show') === true
+}
+
+/** 只收起 Toast(不触发撤销动作),返回键消费用。 */
+export function dismissToast(): void {
+  hideToast()
+}
+
 // ── bottom sheet ─────────────────────────────────────
 
 let sheetRoot: HTMLElement | null = null
-let sheetClose: (() => void) | null = null
 
 /** 打开 bottom sheet;rows 传 null 行当分组标题。 */
 export function openSheet(rows: (HTMLElement | string | null)[]): void {
@@ -105,23 +121,54 @@ export function openSheet(rows: (HTMLElement | string | null)[]): void {
     panel.append(typeof r === 'string' ? h('div', { class: 'sheet-title' }, r) : r)
   }
   mask.addEventListener('click', () => closeSheet())
+  bindSheetSwipe(panel)
   sheetRoot.append(mask, panel)
   document.body.appendChild(sheetRoot)
   requestAnimationFrame(() => sheetRoot?.classList.add('open'))
-  const el = sheetRoot
-  sheetClose = () => {
-    el.classList.remove('open')
-    setTimeout(() => el.remove(), 340)
-  }
+}
+
+/** 下滑手势关闭(设计 §4.3「下滑 / 点遮罩关闭」):面板跟手位移,超过阈值收起,否则回弹。 */
+function bindSheetSwipe(panel: HTMLElement): void {
+  const THRESHOLD = 80
+  let startY = 0
+  let dy = 0
+  let tracking = false
+  panel.addEventListener(
+    'touchstart',
+    (e) => {
+      startY = e.touches[0].clientY
+      dy = 0
+      tracking = false
+    },
+    { passive: true },
+  )
+  panel.addEventListener(
+    'touchmove',
+    (e) => {
+      dy = e.touches[0].clientY - startY
+      if (dy > 0) {
+        tracking = true
+        panel.style.transition = 'none' // 跟手阶段禁用过渡
+        panel.style.transform = `translateY(${dy}px)`
+      }
+    },
+    { passive: true },
+  )
+  panel.addEventListener('touchend', () => {
+    panel.style.transition = ''
+    panel.style.transform = ''
+    if (tracking && dy > THRESHOLD) closeSheet()
+  })
 }
 
 export function closeSheet(): void {
   const el = sheetRoot
   if (!el) return
   sheetRoot = null // 必须先置空:sheetOpen() 依据它判断,__routeBack 依赖该状态
-  sheetClose?.()
-  sheetClose = null
-  setTimeout(() => el.remove(), 400)
+  // 清除下滑手势留下的内联 transform,避免覆盖收起动画的 class 样式
+  el.querySelector('.sheet-panel')?.removeAttribute('style')
+  el.classList.remove('open') // 收起动画
+  setTimeout(() => el.remove(), 400) // 动画结束后移除 DOM(单一定时器)
 }
 
 export function sheetOpen(): boolean {

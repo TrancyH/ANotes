@@ -4,12 +4,14 @@ export type Route =
   | { page: 'list' }
   | { page: 'edit'; id: string }
   | { page: 'trash' }
+  | { page: 'todos' }
   | { page: 'settings' }
 
 export function parseHash(hash: string): Route {
   const h = hash.replace(/^#\/?/, '')
   if (h === '' || h === 'list') return { page: 'list' }
   if (h === 'trash') return { page: 'trash' }
+  if (h === 'todos') return { page: 'todos' }
   if (h === 'settings') return { page: 'settings' }
   const edit = /^edit\/([A-Za-z0-9-]+)$/.exec(h)
   if (edit) return { page: 'edit', id: edit[1] }
@@ -22,6 +24,8 @@ export function routeToHash(route: Route): string {
       return '#/list'
     case 'trash':
       return '#/trash'
+    case 'todos':
+      return '#/todos'
     case 'settings':
       return '#/settings'
     case 'edit':

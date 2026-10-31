@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { createNote, parseNote, serializeNote } from '../src/frontmatter'
 import {
+  collectTodos,
   filterByColor,
   isConflictCopy,
   isNoteColor,
   isTrashExpired,
   relativeTime,
   searchNotes,
+  sortByKey,
   sortForList,
   sortForTrash,
   splitTrash,
@@ -170,5 +172,80 @@ describe('frontmatter ↔ 列表纯函数联测:回收站写入往返', () => {
     expect(back.trashedAt).toBe(trashedAt)
     expect(back.title).toBe('草稿')
     expect(splitTrash([back]).trashed).toHaveLength(1)
+  })
+})
+
+// ── 第一批增量:全文搜索 / 排序键 / 待办聚合 ─────────────
+
+describe('searchNotes 全文(第一批)', () => {
+  const rawA = serializeNote({
+    ...createNote('开头\n\n很深处的关键词蓝鲸\n\n结尾'),
+    id: '20261027-120000-aaaaa',
+    title: '笔记A',
+  })
+  const rawB = serializeNote({ ...createNote('普通内容'), id: '20261027-130000-bbbbb', title: '笔记B' })
+  const rawOf = (id: string): string => (id.endsWith('aaaaa') ? rawA : rawB)
+
+  it('正文命中(摘要截断覆盖不到的深处文本)', () => {
+    const items = [
+      item({ id: '20261027-120000-aaaaa', title: '笔记A' }),
+      item({ id: '20261027-130000-bbbbb', title: '笔记B' }),
+    ]
+    const hit = searchNotes(items, '蓝鲸', rawOf)
+    expect(hit.map((n) => n.title)).toEqual(['笔记A'])
+  })
+
+  it('frontmatter 字段不算正文命中(搜 blue 不命中颜色字段)', () => {
+    const items = [item({ id: '20261027-130000-bbbbb', title: '笔记B' })]
+    expect(searchNotes(items, 'blue', rawOf)).toEqual([])
+  })
+
+  it('无 rawOf 时退化为标题+摘要', () => {
+    const items = [item({ title: '购物清单' }), item({ title: '会议' })]
+    expect(searchNotes(items, '购物')).toHaveLength(1)
+  })
+})
+
+describe('sortByKey(第一批)', () => {
+  const a = item({ id: 'a', title: '乙', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-05T00:00:00.000Z' })
+  const b = item({
+    id: 'b',
+    title: '甲',
+    createdAt: '2026-10-03T00:00:00.000Z',
+    updatedAt: '2026-10-02T00:00:00.000Z',
+    pinned: true,
+  })
+
+  it('updated = 修改时间倒序(置顶在前)', () => {
+    expect(sortByKey([a, b], 'updated').map((n) => n.id)).toEqual(['b', 'a'])
+  })
+  it('created = 创建时间倒序', () => {
+    expect(sortByKey([a, b], 'created').map((n) => n.id)).toEqual(['b', 'a'])
+  })
+  it('title = 字典序且置顶仍在前', () => {
+    expect(sortByKey([a, b], 'title').map((n) => n.id)).toEqual(['b', 'a'])
+  })
+})
+
+describe('collectTodos(第一批)', () => {
+  const raw = serializeNote({
+    ...createNote('- [ ] 买牛奶\n正文\n- [x] 寄快递\n  - [ ] 缩进待办\n* [X] 星号大写待办\n- [ ] \n- 普通列表项'),
+    id: '20261027-120000-ccccc',
+    title: '购物',
+  })
+  const rawOf = (): string => raw
+
+  it('收集待办行(含缩进/星号/大小写;空文本不算)', () => {
+    const todos = collectTodos([item({ id: '20261027-120000-ccccc', title: '购物' })], rawOf)
+    expect(todos.map((t) => t.text)).toEqual(['买牛奶', '缩进待办', '寄快递', '星号大写待办'])
+    expect(todos.map((t) => t.done)).toEqual([false, false, true, true])
+  })
+
+  it('行号记录正确(写回定位用)且未完成在前', () => {
+    const todos = collectTodos([item({ id: '20261027-120000-ccccc', title: '购物' })], rawOf)
+    expect(todos[0]?.lineIndex).toBe(0)
+    expect(todos[1]?.lineIndex).toBe(3) // 缩进待办(未完成)排在已完成的寄快递(行2)之前
+    const dones = todos.map((t) => t.done)
+    expect(dones).toEqual([...dones.filter((d) => !d), ...dones.filter((d) => d)])
   })
 })

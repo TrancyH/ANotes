@@ -31,8 +31,18 @@ export function makeNoteId(now = new Date()): string {
     now.getHours(),
     2,
   )}${p(now.getMinutes(), 2)}${p(now.getSeconds(), 2)}`
-  const rand = Math.random().toString(36).slice(2, 7)
-  return `${stamp}-${rand}`
+  // 后缀必须恰好 5 位:Kotlin 侧 idPattern 严格定长,短后缀会让 writeNote 静默失败
+  return `${stamp}-${randomSuffix5()}`
+}
+
+/** 5 位 36 进制随机后缀;优先 Web Crypto(可预测性更低),兜底 Math.random。 */
+function randomSuffix5(): string {
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const buf = new Uint32Array(1)
+    crypto.getRandomValues(buf)
+    return buf[0].toString(36).slice(0, 5).padEnd(5, '0')
+  }
+  return Math.random().toString(36).slice(2, 7).padEnd(5, '0')
 }
 
 /** 序列化为 .md 文件内容(frontmatter + 正文,v2 全量 8 字段)。 */
@@ -52,6 +62,20 @@ export function serializeNote(note: NoteFile): string {
     note.markdown,
   ]
   return lines.join('\n')
+}
+
+/** 原始 frontmatter 是否显式写有非空 title(区别于 parseNote 的正文派生标题)。 */
+export function hasExplicitTitle(raw: string): boolean {
+  if (!raw.startsWith('---')) return false
+  const end = raw.indexOf('\n---')
+  const head = end === -1 ? raw : raw.slice(0, end)
+  for (const line of head.split('\n')) {
+    if (line.startsWith('title:')) {
+      const v = line.slice(6).trim()
+      return v !== ''
+    }
+  }
+  return false
 }
 
 /** 解析 .md 文件内容;无 frontmatter 或字段损坏时尽力还原(永不抛错)。 */
@@ -159,4 +183,29 @@ function escapeValue(v: string): string {
 
 function unescapeValue(v: string): string {
   return v.replace(/\\n/g, '\n').replace(/\\\\/g, '\\')
+}
+
+// ── 提醒时间(P1):ISO UTC ←→ datetime-local 输入值 ────
+
+/** ISO(或可解析时间)→ datetime-local 输入值(本地时区 `YYYY-MM-DDTHH:mm`);非法返回 ''。 */
+export function toLocalInputValue(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** datetime-local 输入值 → ISO UTC;空串/非法返回 null。 */
+export function fromLocalInputValue(v: string): string | null {
+  if (!v) return null
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+/** 提醒时间的展示文案(本地时区 `MM-DD HH:mm`)。 */
+export function remindAtLabel(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }

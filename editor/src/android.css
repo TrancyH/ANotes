@@ -243,6 +243,20 @@ input { font-family: inherit; color: inherit; }
 .sheet-row.danger { color: var(--an-danger-text); }
 .sheet-row svg { width: 20px; height: 20px; flex: 0 0 auto; }
 .sheet-row .row-value { margin-left: auto; color: var(--an-text-3); font-size: 13px; }
+.sheet-row .remind-input {
+  margin-left: auto;
+  max-width: 55%;
+  color: var(--an-text-3);
+  font-size: 13px;
+  font-family: inherit;
+  background: transparent;
+  border: 1px solid var(--an-border);
+  border-radius: var(--an-radius);
+  padding: 5px 8px;
+  outline: none;
+  color-scheme: dark;
+}
+[data-theme='light'] .sheet-row .remind-input { color-scheme: light; }
 .sheet-colors { display: flex; gap: 22px; padding: 16px; }
 .sheet-dot {
   width: 34px;
@@ -332,6 +346,9 @@ input { font-family: inherit; color: inherit; }
   padding: 14px 16px;
   margin-bottom: 12px;
   transition: background var(--an-t-fast) ease, transform var(--an-t-fast) ease;
+  /* 长按进多选时不弹系统文本选择工具栏 */
+  -webkit-user-select: none;
+  user-select: none;
 }
 .note-card:active { background: var(--an-hover); }
 .note-card .card-top { display: flex; align-items: center; gap: 8px; }
@@ -534,6 +551,45 @@ input { font-family: inherit; color: inherit; }
   color: var(--an-warning-text);
   font-size: 13px;
 }
+
+/* ── 待办汇总页 ─────────────────────────────────── */
+.todo-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--an-surface);
+  border: 1px solid var(--an-border);
+  border-radius: var(--an-radius-md);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.todo-entry input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  accent-color: var(--an-accent);
+  flex: 0 0 auto;
+}
+.todo-entry .todo-main { flex: 1; min-width: 0; }
+.todo-entry .todo-text {
+  font-size: 15px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.todo-entry .todo-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--an-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.todo-entry.done .todo-text {
+  color: var(--an-text-3);
+  text-decoration: line-through;
+}
+.format-toolbar .tool svg { width: 17px; height: 17px; }
+.sheet-row .link-input { max-width: 52%; }
 .trash-actions { display: flex; gap: 8px; margin-top: 10px; }
 .trash-actions .btn { height: 32px; padding: 0 12px; font-size: 13px; }
 

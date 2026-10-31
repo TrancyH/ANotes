@@ -1,13 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
   createNote,
+  fromLocalInputValue,
+  hasExplicitTitle,
   makeNoteId,
   markdownToText,
   noteExcerpt,
   noteWordCount,
   parseNote,
+  remindAtLabel,
   serializeNote,
+  toLocalInputValue,
 } from '../src/frontmatter'
+
+describe('hasExplicitTitle(真机回归:派生标题不回填输入框)', () => {
+  it('显式标题 true;空标题/无 frontmatter false', () => {
+    expect(hasExplicitTitle(serializeNote({ ...createNote('正文'), title: '我的标题' }))).toBe(true)
+    expect(hasExplicitTitle(serializeNote(createNote('')))).toBe(false)
+    expect(hasExplicitTitle('裸 markdown')).toBe(false)
+  })
+})
 
 describe('makeNoteId', () => {
   it('格式为 yyyyMMdd-HHmmss-xxxxx 且两次生成不同', () => {
@@ -15,6 +27,31 @@ describe('makeNoteId', () => {
     const b = makeNoteId(new Date('2026-10-27T06:32:01'))
     expect(a).toMatch(/^20261027-063201-[a-z0-9]{5}$/)
     expect(a).not.toBe(b)
+  })
+
+  it('后缀恒为 5 位定长(Kotlin idPattern 严格定长,短后缀会被 writeNote 拒绝)', () => {
+    for (let i = 0; i < 1000; i++) {
+      expect(makeNoteId(new Date('2026-10-27T06:32:01'))).toMatch(/^20261027-063201-[a-z0-9]{5}$/)
+    }
+  })
+})
+
+describe('提醒时间转换(P1)', () => {
+  it('ISO ↔ datetime-local 本地时区往返', () => {
+    const iso = new Date(2026, 9, 27, 14, 30).toISOString() // 本地 2026-10-27 14:30
+    expect(toLocalInputValue(iso)).toBe('2026-10-27T14:30')
+    expect(fromLocalInputValue('2026-10-27T14:30')).toBe(iso)
+  })
+
+  it('非法输入容错(空串/乱码 → 空值/null,不抛错)', () => {
+    expect(toLocalInputValue('not-a-date')).toBe('')
+    expect(fromLocalInputValue('')).toBeNull()
+    expect(fromLocalInputValue('garbage')).toBeNull()
+  })
+
+  it('remindAtLabel 展示为 MM-DD HH:mm', () => {
+    const iso = new Date(2026, 9, 27, 9, 5).toISOString()
+    expect(remindAtLabel(iso)).toBe('10-27 09:05')
   })
 })
 

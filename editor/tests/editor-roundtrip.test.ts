@@ -72,6 +72,14 @@ describe('Tiptap 编辑器 Markdown 往返', () => {
     expect(editorToMarkdown(ed)).toMatch(/\*\*.{2,}\*\*/)
     ed.destroy()
   })
+
+  it('链接语法往返保真(Link 扩展:桌面同步来的 [text](url) 不能丢)', () => {
+    const ed = makeEditor('见 [文档](https://example.com/a) 与 [搜索](https://example.com/b?q=1)')
+    const md = editorToMarkdown(ed)
+    expect(md).toContain('[文档](https://example.com/a)')
+    expect(md).toContain('[搜索](https://example.com/b?q=1)')
+    ed.destroy()
+  })
 })
 
 // 占位:验证扩展列表里没有漏配(Placehoder 存在即可)

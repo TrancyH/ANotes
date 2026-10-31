@@ -36,10 +36,19 @@ export interface App {
   restoreNotes(ids: string[]): void
   /** 彻底删除。 */
   deleteForever(ids: string[]): void
+  /** 设/改/移除提醒(remindAt ISO UTC;null=移除):写 frontmatter 并同步原生闹钟。 */
+  setReminder(id: string, remindAt: string | null): void
+  /** 待办聚合:勾选/取消某笔记 markdown 指定行的待办(写回 .md 并刷新)。 */
+  toggleTodo(noteId: string, lineIndex: number, done: boolean): void
+  /** 列表排序键(持久化 localStorage)。 */
+  sortKey: 'updated' | 'created' | 'title'
+  setSortKey(key: 'updated' | 'created' | 'title'): void
   /** 搜索词变更(500ms 防抖在实现内)。 */
   setQuery(q: string): void
   /** 编辑页底栏状态更新(重渲染后由 main 回挂)。 */
   setEditFooter(wc: number, savedAt: number | null): void
+  /** 编辑页顶栏(颜色点/置顶)刷新(loadNote/外部热替换晚于页面渲染,由 renderEdit 回挂)。 */
+  refreshEditTop?: () => void
   dark: boolean
 }
 

@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { parseHash, routeToHash, type Route } from '../src/router'
 
 describe('parseHash', () => {
-  it('四个合法路由', () => {
+  it('五个合法路由(第一批新增 #/todos)', () => {
     expect(parseHash('#/list')).toEqual({ page: 'list' })
     expect(parseHash('#/trash')).toEqual({ page: 'trash' })
+    expect(parseHash('#/todos')).toEqual({ page: 'todos' })
     expect(parseHash('#/settings')).toEqual({ page: 'settings' })
     expect(parseHash('#/edit/20261028-101500-x9y2z')).toEqual({
       page: 'edit',
@@ -25,6 +26,7 @@ describe('routeToHash / parseHash 往返', () => {
     const routes: Route[] = [
       { page: 'list' },
       { page: 'trash' },
+      { page: 'todos' },
       { page: 'settings' },
       { page: 'edit', id: '20261028-101500-x9y2z' },
     ]
